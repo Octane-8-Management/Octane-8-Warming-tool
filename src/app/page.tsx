@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 
 type TriggerStatus = "idle" | "loading" | "error";
 type RunStatus = "idle" | "running";
@@ -64,12 +63,11 @@ export default function Home() {
       <div className="shell">
         <div className="topbar">
           <div className="brand">
-            <p className="brand-title">Octane 8 Warmup</p>
-            <p className="brand-subtitle">Account warmup control panel</p>
+            <p className="brand-title">Trigger Warmup</p>
+            <p className="brand-subtitle">
+              Kick off the account warmup n8n workflow
+            </p>
           </div>
-          <Link href="/accounts" className="nav-link">
-            Dashboard →
-          </Link>
         </div>
 
         <div className="card trigger-card">

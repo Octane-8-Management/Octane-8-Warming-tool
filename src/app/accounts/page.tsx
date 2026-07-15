@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import {
+  MailIcon,
+  PeopleIcon,
+  ReplyIcon,
+  TrendingUpIcon,
+} from "@/components/icons";
 
 type SendingLogEntry = {
   sender: string;
@@ -19,6 +24,10 @@ type ReplyEntry = {
 };
 
 type Tab = "accounts" | "log" | "replies";
+type SortDir = "asc" | "desc";
+type DetailItem =
+  | { kind: "log"; entry: SendingLogEntry }
+  | { kind: "reply"; entry: ReplyEntry };
 
 function formatTimestamp(value: string): string {
   if (!value) return "—";
@@ -32,6 +41,28 @@ function formatTimestamp(value: string): string {
   });
 }
 
+function formatFullTimestamp(value: string): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    weekday: "short",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function dayKey(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
+const DAYS_IN_TIMELINE = 14;
+
 export default function AccountsPage() {
   const [connected, setConnected] = useState<boolean | null>(null);
   const [tab, setTab] = useState<Tab>("accounts");
@@ -43,15 +74,27 @@ export default function AccountsPage() {
   const [newEmail, setNewEmail] = useState("");
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [lastSynced, setLastSynced] = useState<Date | null>(null);
 
-  async function loadAll() {
+  const [logSearch, setLogSearch] = useState("");
+  const [logSortDir, setLogSortDir] = useState<SortDir>("desc");
+  const [replySearch, setReplySearch] = useState("");
+  const [replySortDir, setReplySortDir] = useState<SortDir>("desc");
+
+  const [detail, setDetail] = useState<DetailItem | null>(null);
+
+  async function loadAll(isRefresh = false) {
+    if (isRefresh) setRefreshing(true);
+
     const statusRes = await fetch("/api/auth/google/status");
     const statusData = await statusRes.json();
     setConnected(statusData.connected);
 
     if (!statusData.connected) {
       setLoading(false);
+      setRefreshing(false);
       return;
     }
 
@@ -70,15 +113,12 @@ export default function AccountsPage() {
       setError(accountsData.error || "Failed to load accounts");
     }
 
-    if (logRes.ok) {
-      setLog(logData.log.slice().reverse());
-    }
+    if (logRes.ok) setLog(logData.log);
+    if (repliesRes.ok) setReplies(repliesData.replies);
 
-    if (repliesRes.ok) {
-      setReplies(repliesData.replies.slice().reverse());
-    }
-
+    setLastSynced(new Date());
     setLoading(false);
+    setRefreshing(false);
   }
 
   useEffect(() => {
@@ -136,6 +176,86 @@ export default function AccountsPage() {
     }
   }
 
+  // ---- Derived stats ----
+
+  const replyRate = log.length > 0 ? (replies.length / log.length) * 100 : 0;
+
+  const senderCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    log.forEach((entry) => {
+      counts.set(entry.sender, (counts.get(entry.sender) ?? 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4);
+  }, [log]);
+
+  const maxSenderCount = Math.max(1, ...senderCounts.map(([, count]) => count));
+  const seriesColors = ["var(--series-1)", "var(--series-2)", "#eda100", "#008300"];
+
+  const timeline = useMemo(() => {
+    const counts = new Map<string, number>();
+    log.forEach((entry) => {
+      const key = dayKey(entry.timestamp);
+      if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+    });
+
+    const days: { key: string; count: number }[] = [];
+    const today = new Date();
+    for (let i = DAYS_IN_TIMELINE - 1; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      days.push({ key, count: counts.get(key) ?? 0 });
+    }
+    return days;
+  }, [log]);
+
+  const maxDayCount = Math.max(1, ...timeline.map((d) => d.count));
+
+  const accountActivity = useMemo(() => {
+    const map = new Map<string, { sent: number; received: number }>();
+    accounts.forEach((email) => map.set(email, { sent: 0, received: 0 }));
+    log.forEach((entry) => {
+      if (map.has(entry.sender)) map.get(entry.sender)!.sent += 1;
+      if (map.has(entry.recipient)) map.get(entry.recipient)!.received += 1;
+    });
+    return map;
+  }, [accounts, log]);
+
+  const filteredLog = useMemo(() => {
+    const term = logSearch.trim().toLowerCase();
+    const rows = !term
+      ? log
+      : log.filter(
+          (entry) =>
+            entry.sender.toLowerCase().includes(term) ||
+            entry.recipient.toLowerCase().includes(term) ||
+            entry.subject.toLowerCase().includes(term)
+        );
+    return rows.slice().sort((a, b) => {
+      const diff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      return logSortDir === "asc" ? diff : -diff;
+    });
+  }, [log, logSearch, logSortDir]);
+
+  const filteredReplies = useMemo(() => {
+    const term = replySearch.trim().toLowerCase();
+    const rows = !term
+      ? replies
+      : replies.filter(
+          (entry) =>
+            entry.originalSender.toLowerCase().includes(term) ||
+            entry.replier.toLowerCase().includes(term) ||
+            entry.subject.toLowerCase().includes(term) ||
+            entry.replySnippet.toLowerCase().includes(term)
+        );
+    return rows.slice().sort((a, b) => {
+      const diff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      return replySortDir === "asc" ? diff : -diff;
+    });
+  }, [replies, replySearch, replySortDir]);
+
   if (connected === null || loading) {
     return (
       <main className="page">
@@ -174,15 +294,126 @@ export default function AccountsPage() {
           <div className="brand">
             <p className="brand-title">Warmup Dashboard</p>
             <p className="brand-subtitle">
-              Synced with the “warmup testing” Google Sheet
+              {lastSynced
+                ? `Synced ${lastSynced.toLocaleTimeString()} · “warmup testing” sheet`
+                : "Synced with the “warmup testing” sheet"}
             </p>
           </div>
-          <Link href="/" className="nav-link">
-            ← Trigger
-          </Link>
+          <button
+            className="icon-btn"
+            onClick={() => loadAll(true)}
+            disabled={refreshing}
+          >
+            {refreshing ? <span className="spinner" /> : "↻"} Refresh
+          </button>
         </div>
 
         {error && <div className="banner banner-error">{error}</div>}
+
+        <div className="stats-grid">
+          <div className="stat-tile">
+            <div className="stat-tile-head">
+              <p className="stat-label">Accounts in rotation</p>
+              <span className="icon-chip icon-chip-blue">
+                <PeopleIcon size={18} />
+              </span>
+            </div>
+            <div className="stat-value">{accounts.length}</div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile-head">
+              <p className="stat-label">Emails sent</p>
+              <span className="icon-chip icon-chip-green">
+                <MailIcon size={18} />
+              </span>
+            </div>
+            <div className="stat-value">{log.length}</div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile-head">
+              <p className="stat-label">Replies received</p>
+              <span className="icon-chip icon-chip-purple">
+                <ReplyIcon size={18} />
+              </span>
+            </div>
+            <div className="stat-value">{replies.length}</div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile-head">
+              <p className="stat-label">Reply rate</p>
+              <span className="icon-chip icon-chip-orange">
+                <TrendingUpIcon size={18} />
+              </span>
+            </div>
+            <div className="stat-value">{replyRate.toFixed(0)}%</div>
+            <p className={`stat-caption ${replyRate >= 50 ? "good" : "warn"}`}>
+              replies ÷ emails sent
+            </p>
+          </div>
+        </div>
+
+        <div className="charts-row">
+          <div className="card">
+            <p className="chart-title">Sends — last {DAYS_IN_TIMELINE} days</p>
+            <div className="timeline">
+              {timeline.map((d) => (
+                <div className="timeline-bar-wrap" key={d.key}>
+                  {d.count > 0 && (
+                    <div className="timeline-tooltip">
+                      {d.count} on{" "}
+                      {new Date(d.key).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                      })}
+                    </div>
+                  )}
+                  <div
+                    className="timeline-bar"
+                    style={{ height: `${(d.count / maxDayCount) * 100}%` }}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="timeline-axis">
+              <span>
+                {new Date(timeline[0]?.key).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })}
+              </span>
+              <span>Today</span>
+            </div>
+          </div>
+
+          <div className="card">
+            <p className="chart-title">Sends by sender</p>
+            {senderCounts.length === 0 ? (
+              <p className="empty-state" style={{ padding: "1.5rem 0" }}>
+                No sends yet.
+              </p>
+            ) : (
+              <div className="bar-compare">
+                {senderCounts.map(([sender, count], i) => (
+                  <div className="bar-compare-row" key={sender}>
+                    <span className="bar-compare-label" title={sender}>
+                      {sender}
+                    </span>
+                    <div className="bar-track">
+                      <div
+                        className="bar-fill"
+                        style={{
+                          width: `${(count / maxSenderCount) * 100}%`,
+                          background: seriesColors[i % seriesColors.length],
+                        }}
+                      />
+                    </div>
+                    <span className="bar-compare-value">{count}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
 
         <div className="card" style={{ padding: 0 }}>
           <div className="tabs">
@@ -230,91 +461,229 @@ export default function AccountsPage() {
                   <p className="empty-state">No accounts yet.</p>
                 ) : (
                   <ul className="list">
-                    {accounts.map((email) => (
-                      <li key={email} className="list-row">
-                        <span className="list-row-email">{email}</span>
-                        <button
-                          onClick={() => handleRemove(email)}
-                          disabled={busy}
-                          className="btn btn-danger"
-                        >
-                          Remove
-                        </button>
-                      </li>
-                    ))}
+                    {accounts.map((email) => {
+                      const activity = accountActivity.get(email);
+                      const hasActivity =
+                        activity && (activity.sent > 0 || activity.received > 0);
+                      return (
+                        <li key={email} className="list-row">
+                          <span className="list-row-main">
+                            <span className="avatar">{email.charAt(0)}</span>
+                            <span className="list-row-text">
+                              <span className="list-row-email">{email}</span>
+                              {hasActivity && (
+                                <p className="list-row-caption">
+                                  sent {activity!.sent} · received{" "}
+                                  {activity!.received}
+                                </p>
+                              )}
+                            </span>
+                          </span>
+                          <button
+                            onClick={() => handleRemove(email)}
+                            disabled={busy}
+                            className="link-action"
+                          >
+                            Remove
+                          </button>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
             )}
 
             {tab === "log" && (
-              <div className="table-wrap">
-                {log.length === 0 ? (
-                  <p className="empty-state">No sends logged yet.</p>
-                ) : (
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Timestamp</th>
-                        <th>Sender</th>
-                        <th>Recipient</th>
-                        <th>Subject</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {log.map((entry, i) => (
-                        <tr key={i}>
-                          <td className="cell-mono">
-                            {formatTimestamp(entry.timestamp)}
-                          </td>
-                          <td>{entry.sender}</td>
-                          <td>{entry.recipient}</td>
-                          <td className="cell-truncate">{entry.subject}</td>
+              <>
+                <div className="toolbar">
+                  <input
+                    className="input search-input"
+                    placeholder="Search sender, recipient, or subject…"
+                    value={logSearch}
+                    onChange={(e) => setLogSearch(e.target.value)}
+                  />
+                  <span className="stat-caption">
+                    {filteredLog.length} of {log.length} shown · click a row for details
+                  </span>
+                </div>
+                <div className="table-wrap">
+                  {filteredLog.length === 0 ? (
+                    <p className="empty-state">
+                      {log.length === 0 ? "No sends logged yet." : "No matches."}
+                    </p>
+                  ) : (
+                    <table>
+                      <thead>
+                        <tr>
+                          <th
+                            className="th-sort"
+                            onClick={() =>
+                              setLogSortDir((d) => (d === "asc" ? "desc" : "asc"))
+                            }
+                          >
+                            Timestamp
+                            <span className="sort-arrow">
+                              {logSortDir === "asc" ? "▲" : "▼"}
+                            </span>
+                          </th>
+                          <th>Sender</th>
+                          <th>Recipient</th>
+                          <th>Subject</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
+                      </thead>
+                      <tbody>
+                        {filteredLog.map((entry, i) => (
+                          <tr
+                            key={i}
+                            className="row-clickable"
+                            onClick={() => setDetail({ kind: "log", entry })}
+                          >
+                            <td className="cell-mono">
+                              {formatTimestamp(entry.timestamp)}
+                            </td>
+                            <td>{entry.sender}</td>
+                            <td>{entry.recipient}</td>
+                            <td className="cell-truncate">{entry.subject}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </>
             )}
 
             {tab === "replies" && (
-              <div className="table-wrap">
-                {replies.length === 0 ? (
-                  <p className="empty-state">No replies yet.</p>
-                ) : (
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Timestamp</th>
-                        <th>Original Sender</th>
-                        <th>Replier</th>
-                        <th>Subject</th>
-                        <th>Snippet</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {replies.map((entry, i) => (
-                        <tr key={i}>
-                          <td className="cell-mono">
-                            {formatTimestamp(entry.timestamp)}
-                          </td>
-                          <td>{entry.originalSender}</td>
-                          <td>{entry.replier}</td>
-                          <td className="cell-truncate">{entry.subject}</td>
-                          <td className="cell-truncate">
-                            {entry.replySnippet}
-                          </td>
+              <>
+                <div className="toolbar">
+                  <input
+                    className="input search-input"
+                    placeholder="Search sender, replier, subject, or snippet…"
+                    value={replySearch}
+                    onChange={(e) => setReplySearch(e.target.value)}
+                  />
+                  <span className="stat-caption">
+                    {filteredReplies.length} of {replies.length} shown · click a row for details
+                  </span>
+                </div>
+                <div className="table-wrap">
+                  {filteredReplies.length === 0 ? (
+                    <p className="empty-state">
+                      {replies.length === 0 ? "No replies yet." : "No matches."}
+                    </p>
+                  ) : (
+                    <table>
+                      <thead>
+                        <tr>
+                          <th
+                            className="th-sort"
+                            onClick={() =>
+                              setReplySortDir((d) => (d === "asc" ? "desc" : "asc"))
+                            }
+                          >
+                            Timestamp
+                            <span className="sort-arrow">
+                              {replySortDir === "asc" ? "▲" : "▼"}
+                            </span>
+                          </th>
+                          <th>Original Sender</th>
+                          <th>Replier</th>
+                          <th>Subject</th>
+                          <th>Snippet</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
+                      </thead>
+                      <tbody>
+                        {filteredReplies.map((entry, i) => (
+                          <tr
+                            key={i}
+                            className="row-clickable"
+                            onClick={() => setDetail({ kind: "reply", entry })}
+                          >
+                            <td className="cell-mono">
+                              {formatTimestamp(entry.timestamp)}
+                            </td>
+                            <td>{entry.originalSender}</td>
+                            <td>{entry.replier}</td>
+                            <td className="cell-truncate">{entry.subject}</td>
+                            <td className="cell-truncate">
+                              {entry.replySnippet}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </>
             )}
           </div>
         </div>
       </div>
+
+      {detail && (
+        <div className="modal-overlay" onClick={() => setDetail(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setDetail(null)}>
+              ✕
+            </button>
+
+            {detail.kind === "log" ? (
+              <>
+                <h2 className="modal-title">Sent email</h2>
+                <div className="modal-field">
+                  <p className="modal-field-label">Timestamp</p>
+                  <p className="modal-field-value">
+                    {formatFullTimestamp(detail.entry.timestamp)}
+                  </p>
+                </div>
+                <div className="modal-field">
+                  <p className="modal-field-label">Sender</p>
+                  <p className="modal-field-value">{detail.entry.sender}</p>
+                </div>
+                <div className="modal-field">
+                  <p className="modal-field-label">Recipient</p>
+                  <p className="modal-field-value">{detail.entry.recipient}</p>
+                </div>
+                <div className="modal-field">
+                  <p className="modal-field-label">Subject</p>
+                  <p className="modal-field-value">{detail.entry.subject}</p>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 className="modal-title">Reply</h2>
+                <div className="modal-field">
+                  <p className="modal-field-label">Timestamp</p>
+                  <p className="modal-field-value">
+                    {formatFullTimestamp(detail.entry.timestamp)}
+                  </p>
+                </div>
+                <div className="modal-field">
+                  <p className="modal-field-label">Original sender</p>
+                  <p className="modal-field-value">
+                    {detail.entry.originalSender}
+                  </p>
+                </div>
+                <div className="modal-field">
+                  <p className="modal-field-label">Replier</p>
+                  <p className="modal-field-value">{detail.entry.replier}</p>
+                </div>
+                <div className="modal-field">
+                  <p className="modal-field-label">Subject</p>
+                  <p className="modal-field-value">{detail.entry.subject}</p>
+                </div>
+                <div className="modal-field">
+                  <p className="modal-field-label">Full reply</p>
+                  <div className="snippet-text">
+                    {detail.entry.replySnippet}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
