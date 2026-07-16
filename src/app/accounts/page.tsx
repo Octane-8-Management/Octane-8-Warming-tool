@@ -62,6 +62,32 @@ function dayKey(value: string): string {
 }
 
 const DAYS_IN_TIMELINE = 14;
+const CACHE_KEY = "warmup-dashboard-cache-v1";
+
+type CachedDashboard = {
+  connected: boolean;
+  accounts: string[];
+  log: SendingLogEntry[];
+  replies: ReplyEntry[];
+  lastSynced: string;
+};
+
+function readCache(): CachedDashboard | null {
+  try {
+    const raw = sessionStorage.getItem(CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(data: CachedDashboard): void {
+  try {
+    sessionStorage.setItem(CACHE_KEY, JSON.stringify(data));
+  } catch {
+    // Ignore (private browsing / storage disabled) — just skip caching.
+  }
+}
 
 export default function AccountsPage() {
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -88,7 +114,15 @@ export default function AccountsPage() {
   async function loadAll(isRefresh = false) {
     if (isRefresh) setRefreshing(true);
 
-    const statusRes = await fetch("/api/auth/google/status");
+    // Fire all four requests together instead of waiting on auth-status
+    // first — shaves a full round trip off every load.
+    const [statusRes, accountsRes, logRes, repliesRes] = await Promise.all([
+      fetch("/api/auth/google/status"),
+      fetch("/api/accounts"),
+      fetch("/api/sending-log"),
+      fetch("/api/replies"),
+    ]);
+
     const statusData = await statusRes.json();
     setConnected(statusData.connected);
 
@@ -98,27 +132,44 @@ export default function AccountsPage() {
       return;
     }
 
-    const [accountsRes, logRes, repliesRes] = await Promise.all([
-      fetch("/api/accounts"),
-      fetch("/api/sending-log"),
-      fetch("/api/replies"),
+    const [accountsData, logData, repliesData] = await Promise.all([
+      accountsRes.json(),
+      logRes.json(),
+      repliesRes.json(),
     ]);
-    const accountsData = await accountsRes.json();
-    const logData = await logRes.json();
-    const repliesData = await repliesRes.json();
+
+    let nextAccounts = accounts;
+    let nextLog = log;
+    let nextReplies = replies;
 
     if (accountsRes.ok) {
-      setAccounts(accountsData.accounts);
+      nextAccounts = accountsData.accounts;
+      setAccounts(nextAccounts);
     } else {
       setError(accountsData.error || "Failed to load accounts");
     }
 
-    if (logRes.ok) setLog(logData.log);
-    if (repliesRes.ok) setReplies(repliesData.replies);
+    if (logRes.ok) {
+      nextLog = logData.log;
+      setLog(nextLog);
+    }
+    if (repliesRes.ok) {
+      nextReplies = repliesData.replies;
+      setReplies(nextReplies);
+    }
 
-    setLastSynced(new Date());
+    const syncedAt = new Date();
+    setLastSynced(syncedAt);
     setLoading(false);
     setRefreshing(false);
+
+    writeCache({
+      connected: true,
+      accounts: nextAccounts,
+      log: nextLog,
+      replies: nextReplies,
+      lastSynced: syncedAt.toISOString(),
+    });
   }
 
   useEffect(() => {
@@ -126,7 +177,22 @@ export default function AccountsPage() {
     const urlError = params.get("error");
     if (urlError) setError(urlError);
 
-    loadAll();
+    // Show cached data instantly (if we have it from a previous visit this
+    // session), then silently revalidate in the background — avoids the
+    // full loading skeleton every time you navigate back to this page.
+    const cached = readCache();
+    if (cached) {
+      setConnected(cached.connected);
+      setAccounts(cached.accounts);
+      setLog(cached.log);
+      setReplies(cached.replies);
+      setLastSynced(new Date(cached.lastSynced));
+      setLoading(false);
+      loadAll(true);
+    } else {
+      loadAll();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleAdd(e: React.FormEvent) {
@@ -289,7 +355,7 @@ export default function AccountsPage() {
 
   return (
     <main className="page">
-      <div className="shell">
+      <div className="shell dash-pop">
         <div className="topbar">
           <div className="brand">
             <p className="brand-title">Warmup Dashboard</p>
