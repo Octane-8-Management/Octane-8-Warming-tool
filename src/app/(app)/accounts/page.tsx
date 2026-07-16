@@ -363,16 +363,13 @@ export default function AccountsPage() {
       <main className="page">
         <div className="shell">
           <div className="card connect-card">
-            <div className="connect-icon">G</div>
-            <h1 className="brand-title">Connect Google Account</h1>
+            <div className="connect-icon">!</div>
+            <h1 className="brand-title">Dashboard data unavailable</h1>
             <p className="brand-subtitle">
-              Connect the account that owns the “warmup testing” sheet to
-              manage accounts and view activity here.
+              The Google Sheets connection isn&apos;t set up yet. Contact the
+              site admin to get this connected.
             </p>
             {error && <div className="banner banner-error">{error}</div>}
-            <a href="/api/auth/google/login" className="btn btn-lg">
-              Connect Google Account
-            </a>
           </div>
         </div>
       </main>
