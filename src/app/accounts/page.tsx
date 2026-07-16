@@ -1,12 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  CheckIcon,
   MailIcon,
   PeopleIcon,
+  RefreshIcon,
   ReplyIcon,
   TrendingUpIcon,
 } from "@/components/icons";
+
+const JUST_REFRESHED_DISPLAY_MS = 1600;
 
 type SendingLogEntry = {
   sender: string;
@@ -101,8 +105,10 @@ export default function AccountsPage() {
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [justRefreshed, setJustRefreshed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
+  const justRefreshedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [logSearch, setLogSearch] = useState("");
   const [logSortDir, setLogSortDir] = useState<SortDir>("desc");
@@ -171,6 +177,26 @@ export default function AccountsPage() {
       lastSynced: syncedAt.toISOString(),
     });
   }
+
+  async function handleManualRefresh() {
+    await loadAll(true);
+    setJustRefreshed(true);
+
+    if (justRefreshedTimeoutRef.current) {
+      clearTimeout(justRefreshedTimeoutRef.current);
+    }
+    justRefreshedTimeoutRef.current = setTimeout(() => {
+      setJustRefreshed(false);
+    }, JUST_REFRESHED_DISPLAY_MS);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (justRefreshedTimeoutRef.current) {
+        clearTimeout(justRefreshedTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -366,11 +392,20 @@ export default function AccountsPage() {
             </p>
           </div>
           <button
-            className="icon-btn"
-            onClick={() => loadAll(true)}
+            className={`icon-btn ${justRefreshed ? "just-refreshed" : ""}`}
+            onClick={handleManualRefresh}
             disabled={refreshing}
+            title="Refresh dashboard data"
           >
-            {refreshing ? <span className="spinner" /> : "↻"} Refresh
+            {justRefreshed ? (
+              <CheckIcon size={16} />
+            ) : (
+              <RefreshIcon
+                size={16}
+                className={`refresh-icon ${refreshing ? "spinning" : ""}`}
+              />
+            )}
+            {refreshing ? "Refreshing…" : justRefreshed ? "Updated" : "Refresh"}
           </button>
         </div>
 

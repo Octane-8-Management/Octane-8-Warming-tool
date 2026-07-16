@@ -275,6 +275,12 @@ button {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 1.75rem;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
 }
 
 .card-title {
@@ -358,15 +364,7 @@ button {
 }
 
 /* ---- Trigger card v2 ---- */
-
-.trigger-card {
-  transition: box-shadow 0.2s ease, transform 0.2s ease;
-}
-
-.trigger-card:hover {
-  box-shadow: var(--shadow-md);
-  transform: translateY(-2px);
-}
+/* Hover lift is inherited from the shared .card:hover rule above. */
 
 .trigger-card-head {
   display: flex;
@@ -891,6 +889,12 @@ tbody tr:hover {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 1.25rem 1.35rem;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.stat-tile:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
 }
 
 .stat-tile-head {
@@ -1237,8 +1241,8 @@ tbody tr:hover {
 .icon-btn {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.45rem 0.8rem;
+  gap: 0.45rem;
+  padding: 0.45rem 0.85rem;
   font-size: 0.8rem;
   font-weight: 600;
   border-radius: var(--radius-sm);
@@ -1246,10 +1250,41 @@ tbody tr:hover {
   background: var(--surface);
   color: var(--text-muted);
   cursor: pointer;
-  transition: background-color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease,
+    border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
-.icon-btn:hover {
+.icon-btn:hover:not(:disabled) {
   background: var(--surface-muted);
   color: var(--text);
+  border-color: var(--text-muted);
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+}
+
+.icon-btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.96);
+}
+
+.icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.icon-btn .refresh-icon {
+  transition: transform 0.35s ease;
+}
+
+.icon-btn:hover:not(:disabled) .refresh-icon:not(.spinning) {
+  transform: rotate(210deg);
+}
+
+.icon-btn .refresh-icon.spinning {
+  animation: spin 0.7s linear infinite;
+}
+
+.icon-btn.just-refreshed {
+  background: var(--success-soft);
+  color: var(--success);
+  border-color: transparent;
 }
