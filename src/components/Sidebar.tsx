@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BoltIcon, GridIcon } from "./icons";
+import { OctaneLogoMark } from "./OctaneLogoMark";
 
 const NAV_ITEMS = [
   { href: "/", label: "Trigger", icon: BoltIcon },
@@ -15,7 +16,7 @@ export default function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sidebar-logo">
-        <span className="sidebar-logo-mark">∞</span>
+        <OctaneLogoMark size={26} />
         <span className="sidebar-logo-text">Octane 8</span>
       </div>
 
