@@ -5,4 +5,5 @@ out
 .env
 .env.local
 .google-token.json
+.workflow-status.json
 npm-debug.log*
