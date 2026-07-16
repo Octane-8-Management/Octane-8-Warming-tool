@@ -1,8 +1,5 @@
-import fs from "fs";
-import path from "path";
 import { google } from "googleapis";
 
-const TOKEN_PATH = path.join(process.cwd(), ".google-token.json");
 const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
 
 function createOAuth2Client() {
@@ -22,37 +19,36 @@ export function getAuthUrl(): string {
   });
 }
 
-export async function exchangeCodeForTokens(code: string): Promise<void> {
+// Serverless deployments (Vercel, etc.) have a read-only filesystem, so the
+// token can't be written to disk. Instead this exchanges the OAuth code for
+// a refresh token and hands it back so it can be set as the
+// GOOGLE_REFRESH_TOKEN environment variable — from then on, access tokens are
+// derived from it in memory on each request, nothing is ever persisted to disk.
+export async function exchangeCodeForRefreshToken(code: string): Promise<string> {
   const client = createOAuth2Client();
   const { tokens } = await client.getToken(code);
-  fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
+
+  if (!tokens.refresh_token) {
+    throw new Error(
+      "Google did not return a refresh token. This usually means the app already has a granted session — revoke access at https://myaccount.google.com/permissions and try connecting again."
+    );
+  }
+
+  return tokens.refresh_token;
 }
 
 export function isConnected(): boolean {
-  return fs.existsSync(TOKEN_PATH);
-}
-
-export function disconnect(): void {
-  if (fs.existsSync(TOKEN_PATH)) {
-    fs.unlinkSync(TOKEN_PATH);
-  }
+  return Boolean(process.env.GOOGLE_REFRESH_TOKEN);
 }
 
 export function getAuthorizedClient() {
-  if (!fs.existsSync(TOKEN_PATH)) {
-    throw new Error("Google account not connected yet");
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+
+  if (!refreshToken) {
+    throw new Error("Google account not connected yet (GOOGLE_REFRESH_TOKEN is not set)");
   }
 
-  const storedTokens = JSON.parse(fs.readFileSync(TOKEN_PATH, "utf-8"));
   const client = createOAuth2Client();
-  client.setCredentials(storedTokens);
-
-  // Persist a rotated access token (and refresh token, if Google issues a new one)
-  // so the next request doesn't have to re-authenticate.
-  client.on("tokens", (newTokens) => {
-    const merged = { ...storedTokens, ...newTokens };
-    fs.writeFileSync(TOKEN_PATH, JSON.stringify(merged, null, 2));
-  });
-
+  client.setCredentials({ refresh_token: refreshToken });
   return client;
 }

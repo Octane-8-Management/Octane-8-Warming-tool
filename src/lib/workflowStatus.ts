@@ -1,12 +1,18 @@
-// Per-sender run status, persisted to a local JSON file.
+// Per-sender run status, persisted to a JSON file in the OS temp directory.
 //
 // Next.js dev mode compiles API routes lazily on first hit, and the first
 // compile of a *new* route can reset plain in-memory module state shared
 // with already-compiled routes. Persisting to disk sidesteps that entirely
-// (and survives a dev server restart as a bonus). Fine for a single-instance
-// local app; not meant for multi-instance/production deployments.
+// (and survives a dev server restart as a bonus).
+//
+// The temp dir (not process.cwd()) is deliberate: serverless platforms
+// (Vercel, etc.) ship a read-only filesystem everywhere except /tmp. This
+// state is instance-scoped there — fine for a soft, best-effort cooldown
+// lock, but not a source of truth you can rely on across cold starts or
+// multiple concurrent instances.
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 
 type Status = "idle" | "running";
@@ -17,7 +23,7 @@ type StatusFile = Record<string, SenderState>;
 // n8n can also unlock early via the completion callback (POST route).
 const COOLDOWN_MINUTES = 30;
 
-const STATUS_PATH = path.join(process.cwd(), ".workflow-status.json");
+const STATUS_PATH = path.join(os.tmpdir(), "octane8-workflow-status.json");
 
 function readAll(): StatusFile {
   try {
