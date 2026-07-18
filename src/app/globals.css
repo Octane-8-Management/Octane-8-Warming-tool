@@ -288,12 +288,11 @@ button {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 1.75rem;
-  transition: box-shadow 0.2s ease, transform 0.2s ease;
+  transition: box-shadow 0.2s ease;
 }
 
 .card:hover {
   box-shadow: var(--shadow-md);
-  transform: translateY(-2px);
 }
 
 .card-title {
@@ -916,12 +915,11 @@ tbody tr:hover {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 1.25rem 1.35rem;
-  transition: box-shadow 0.2s ease, transform 0.2s ease;
+  transition: box-shadow 0.2s ease;
 }
 
 .stat-tile:hover {
   box-shadow: var(--shadow-md);
-  transform: translateY(-2px);
 }
 
 .stat-tile-head {
@@ -1286,7 +1284,6 @@ tbody tr:hover {
   color: var(--text);
   border-color: var(--text-muted);
   box-shadow: var(--shadow);
-  transform: translateY(-1px);
 }
 
 .icon-btn:active:not(:disabled) {
