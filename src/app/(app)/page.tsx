@@ -8,10 +8,18 @@ type RunStatus = "idle" | "running";
 type Accent = "blue" | "purple";
 
 const POLL_INTERVAL_MS = 5000;
-const TICK_INTERVAL_MS = 5000;
+const TICK_INTERVAL_MS = 1000;
 const MIN_COUNT = 1;
 const MAX_COUNT = 20;
 const COOLDOWN_MINUTES = 30;
+const COOLDOWN_MS = COOLDOWN_MINUTES * 60_000;
+
+// Server run state lives in /tmp, which is per-instance on serverless: a poll
+// can land on an instance that never saw the trigger and answer "idle" while
+// the run is very much alive. Treat a lone idle reply as noise and only drop
+// the cooldown after this many in a row, so the bar stops flickering while
+// n8n's early-unlock callback still lands within ~15s.
+const IDLE_CONFIRMATIONS = 3;
 
 function TriggerCard({
   label,
@@ -23,16 +31,38 @@ function TriggerCard({
   accent: Accent;
 }) {
   const [count, setCount] = useState(5);
-  const [runStatus, setRunStatus] = useState<RunStatus>("idle");
   const [startedAt, setStartedAt] = useState<number | null>(null);
-  const [availableAt, setAvailableAt] = useState<number | null>(null);
   const [triggerStatus, setTriggerStatus] = useState<TriggerStatus>("idle");
   const [message, setMessage] = useState("");
   const [lastPayload, setLastPayload] = useState("");
   const [now, setNow] = useState(() => Date.now());
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const idleStreak = useRef(0);
+
+  // The cooldown is a pure function of startedAt, so the client can run it on
+  // its own and survive both a page reload and an amnesiac server instance.
+  const storageKey = `octane8:cooldown:${senderEmail}`;
+
+  function beginCooldown(ts: number) {
+    idleStreak.current = 0;
+    setStartedAt(ts);
+    try {
+      localStorage.setItem(storageKey, String(ts));
+    } catch {
+      // Private mode / storage disabled: in-memory state still works.
+    }
+  }
+
+  function endCooldown() {
+    idleStreak.current = 0;
+    setStartedAt(null);
+    try {
+      localStorage.removeItem(storageKey);
+    } catch {
+      // Ignore.
+    }
+  }
 
   async function pollStatus() {
     try {
@@ -40,24 +70,46 @@ function TriggerCard({
         `/api/workflow-status?sender=${encodeURIComponent(senderEmail)}`
       );
       const data = await res.json();
-      setRunStatus(data.status === "running" ? "running" : "idle");
-      setStartedAt(data.startedAt ?? null);
-      setAvailableAt(data.availableAt ?? null);
+
+      if (data.status === "running" && typeof data.startedAt === "number") {
+        beginCooldown(data.startedAt);
+        return;
+      }
+
+      idleStreak.current += 1;
+      if (idleStreak.current >= IDLE_CONFIRMATIONS) endCooldown();
     } catch {
       // Ignore transient poll failures; next tick will retry.
     }
   }
 
   useEffect(() => {
+    const stored = Number(localStorage.getItem(storageKey));
+    if (Number.isFinite(stored) && stored > 0 && Date.now() - stored < COOLDOWN_MS) {
+      setStartedAt(stored);
+    }
+
+    idleStreak.current = 0;
     pollStatus();
     pollRef.current = setInterval(pollStatus, POLL_INTERVAL_MS);
-    tickRef.current = setInterval(() => setNow(Date.now()), TICK_INTERVAL_MS);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
-      if (tickRef.current) clearInterval(tickRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [senderEmail]);
+
+  // Only tick while something is actually counting down, and expire the run
+  // locally at 30 minutes rather than waiting for the server to agree.
+  useEffect(() => {
+    if (startedAt === null) return;
+    const id = setInterval(() => {
+      const t = Date.now();
+      setNow(t);
+      if (t - startedAt >= COOLDOWN_MS) endCooldown();
+    }, TICK_INTERVAL_MS);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startedAt]);
 
   async function handleTrigger() {
     setTriggerStatus("loading");
@@ -76,14 +128,13 @@ function TriggerCard({
 
       if (res.ok) {
         setTriggerStatus("idle");
-        setRunStatus("running");
-        setStartedAt(data.run?.startedAt ?? Date.now());
-        setAvailableAt(data.run?.availableAt ?? null);
+        beginCooldown(data.run?.startedAt ?? Date.now());
         setMessage(`Triggered for ${label} (count: ${count}).`);
       } else {
         setTriggerStatus("error");
         setMessage(data.error || `Request failed with status ${res.status}`);
-        if (res.status === 409) setRunStatus("running");
+        // A 409 means the server knows about a run we lost track of; adopt it.
+        if (res.status === 409) pollStatus();
       }
     } catch (err) {
       setTriggerStatus("error");
@@ -91,20 +142,20 @@ function TriggerCard({
     }
   }
 
+  const availableAt = startedAt !== null ? startedAt + COOLDOWN_MS : null;
+  const remainingMs = availableAt !== null ? availableAt - now : 0;
+  const runStatus: RunStatus = remainingMs > 0 ? "running" : "idle";
   const isBusy = runStatus === "running" || triggerStatus === "loading";
 
-  const remainingMin =
-    runStatus === "running" && availableAt
-      ? Math.max(1, Math.ceil((availableAt - now) / 60000))
-      : null;
+  const remainingLabel =
+    remainingMs >= 60_000
+      ? `Available in ${Math.ceil(remainingMs / 60_000)} min`
+      : "Available in under a minute";
 
-  const cooldownPercent =
-    runStatus === "running" && startedAt && availableAt
-      ? Math.max(
-          0,
-          Math.min(100, ((availableAt - now) / (availableAt - startedAt)) * 100)
-        )
-      : 0;
+  const cooldownPercent = Math.max(
+    0,
+    Math.min(100, (remainingMs / COOLDOWN_MS) * 100)
+  );
 
   function setClampedCount(next: number) {
     setCount(Math.min(MAX_COUNT, Math.max(MIN_COUNT, next)));
@@ -129,7 +180,7 @@ function TriggerCard({
 
       <span className={`status-pill ${runStatus}`}>
         <span className="status-dot" />
-        {runStatus === "running" ? `Available in ${remainingMin} min` : "Ready"}
+        {runStatus === "running" ? remainingLabel : "Ready"}
       </span>
 
       {runStatus === "running" && (
