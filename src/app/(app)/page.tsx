@@ -1,25 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { BoltIcon } from "@/components/icons";
 
 type TriggerStatus = "idle" | "loading" | "error";
-type RunStatus = "idle" | "running";
 type Accent = "blue" | "purple";
 
-const POLL_INTERVAL_MS = 5000;
-const TICK_INTERVAL_MS = 1000;
 const MIN_COUNT = 1;
 const MAX_COUNT = 20;
-const COOLDOWN_MINUTES = 10;
-const COOLDOWN_MS = COOLDOWN_MINUTES * 60_000;
-
-// Server run state lives in /tmp, which is per-instance on serverless: a poll
-// can land on an instance that never saw the trigger and answer "idle" while
-// the run is very much alive. Treat a lone idle reply as noise and only drop
-// the cooldown after this many in a row, so the bar stops flickering while
-// n8n's early-unlock callback still lands within ~15s.
-const IDLE_CONFIRMATIONS = 3;
+// Matches the server's COOLDOWN_SECONDS in workflowStatus.ts — used only as
+// a fallback if a response somehow doesn't include the server's own
+// availableAt.
+const DEFAULT_LOCKOUT_MS = 15_000;
 
 function TriggerCard({
   label,
@@ -31,114 +23,47 @@ function TriggerCard({
   accent: Accent;
 }) {
   const [count, setCount] = useState(5);
-  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [unlockAt, setUnlockAt] = useState<number | null>(null);
   const [triggerStatus, setTriggerStatus] = useState<TriggerStatus>("idle");
   const [message, setMessage] = useState("");
   const [lastPayload, setLastPayload] = useState("");
   const [now, setNow] = useState(() => Date.now());
 
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const idleStreak = useRef(0);
-  // Mirrors `startedAt` for the poll loop to read synchronously. The interval
-  // is created once (see the mount effect below) and never recreated, so its
-  // closure would otherwise keep seeing the `startedAt` from mount — a ref
-  // sidesteps that stale-closure trap.
-  const startedAtRef = useRef<number | null>(null);
-  // The specific run (by startedAt) we most recently decided is over, so a
-  // stale instance re-echoing "still running" for that SAME run afterward
-  // gets ignored instead of reviving the cooldown bar. Without this, a
-  // straggling response can pop the bar back up right after it correctly
-  // disappeared, which is the "glitching" this whole poll dance is trying to
-  // avoid in the first place.
-  const lastEndedAtRef = useRef<number | null>(null);
-
-  // The cooldown is a pure function of startedAt, so the client can run it on
-  // its own and survive both a page reload and an amnesiac server instance.
-  const storageKey = `octane8:cooldown:${senderEmail}`;
-
-  function beginCooldown(ts: number) {
-    idleStreak.current = 0;
-    startedAtRef.current = ts;
-    setStartedAt(ts);
-    try {
-      localStorage.setItem(storageKey, String(ts));
-    } catch {
-      // Private mode / storage disabled: in-memory state still works.
-    }
-  }
-
-  function endCooldown() {
-    idleStreak.current = 0;
-    lastEndedAtRef.current = startedAtRef.current;
-    startedAtRef.current = null;
-    setStartedAt(null);
-    try {
-      localStorage.removeItem(storageKey);
-    } catch {
-      // Ignore.
-    }
-  }
-
-  async function pollStatus() {
-    try {
-      const res = await fetch(
-        `/api/workflow-status?sender=${encodeURIComponent(senderEmail)}`
-      );
-      const data = await res.json();
-
-      if (data.status === "running" && typeof data.startedAt === "number") {
-        // A stale echo of a run we've already decided is over — ignore it
-        // rather than reviving the cooldown.
-        if (data.startedAt === lastEndedAtRef.current) return;
-
-        // Only treat this as new information if it's a different run than
-        // the one we already have locked in. A stale serverless instance
-        // re-echoing the SAME run we already know about (e.g. after n8n's
-        // early-unlock landed on a different instance) must not reset the
-        // idle streak — otherwise that streak can never reach
-        // IDLE_CONFIRMATIONS while stale and fresh instances keep
-        // round-robining, and the UI bounces between locked/unlocked.
-        if (data.startedAt !== startedAtRef.current) {
-          beginCooldown(data.startedAt);
-        }
-        return;
-      }
-
-      idleStreak.current += 1;
-      if (idleStreak.current >= IDLE_CONFIRMATIONS) endCooldown();
-    } catch {
-      // Ignore transient poll failures; next tick will retry.
-    }
-  }
-
+  // One-shot check on load — e.g. someone else just triggered this sender
+  // from another browser. Deliberately NOT a repeating poll: reconciling
+  // with server run-state on an interval is what caused the flicker before,
+  // since that state lives in a per-instance temp file on serverless. A
+  // short fixed lockout after a successful trigger is enough on its own.
   useEffect(() => {
-    const stored = Number(localStorage.getItem(storageKey));
-    if (Number.isFinite(stored) && stored > 0 && Date.now() - stored < COOLDOWN_MS) {
-      startedAtRef.current = stored;
-      setStartedAt(stored);
-    }
+    let cancelled = false;
 
-    idleStreak.current = 0;
-    pollStatus();
-    pollRef.current = setInterval(pollStatus, POLL_INTERVAL_MS);
+    fetch(`/api/workflow-status?sender=${encodeURIComponent(senderEmail)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled && data.status === "running" && typeof data.availableAt === "number") {
+          setUnlockAt(data.availableAt);
+        }
+      })
+      .catch(() => {
+        // Ignore; worst case the button is enabled and a real lock still
+        // guarding server-side surfaces as a 409 on click.
+      });
+
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [senderEmail]);
 
-  // Only tick while something is actually counting down, and expire the run
-  // locally at COOLDOWN_MS rather than waiting for the server to agree.
+  // Only tick while actually counting down.
   useEffect(() => {
-    if (startedAt === null) return;
+    if (unlockAt === null) return;
     const id = setInterval(() => {
       const t = Date.now();
       setNow(t);
-      if (t - startedAt >= COOLDOWN_MS) endCooldown();
-    }, TICK_INTERVAL_MS);
+      if (t >= unlockAt) setUnlockAt(null);
+    }, 1000);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startedAt]);
+  }, [unlockAt]);
 
   async function handleTrigger() {
     setTriggerStatus("loading");
@@ -157,13 +82,15 @@ function TriggerCard({
 
       if (res.ok) {
         setTriggerStatus("idle");
-        beginCooldown(data.run?.startedAt ?? Date.now());
+        setUnlockAt(data.run?.availableAt ?? Date.now() + DEFAULT_LOCKOUT_MS);
         setMessage(`Triggered for ${label} (count: ${count}).`);
       } else {
         setTriggerStatus("error");
         setMessage(data.error || `Request failed with status ${res.status}`);
-        // A 409 means the server knows about a run we lost track of; adopt it.
-        if (res.status === 409) pollStatus();
+        // A 409 means the server knows about a lock we lost track of; adopt it.
+        if (res.status === 409 && typeof data.run?.availableAt === "number") {
+          setUnlockAt(data.run.availableAt);
+        }
       }
     } catch (err) {
       setTriggerStatus("error");
@@ -171,20 +98,10 @@ function TriggerCard({
     }
   }
 
-  const availableAt = startedAt !== null ? startedAt + COOLDOWN_MS : null;
-  const remainingMs = availableAt !== null ? availableAt - now : 0;
-  const runStatus: RunStatus = remainingMs > 0 ? "running" : "idle";
-  const isBusy = runStatus === "running" || triggerStatus === "loading";
-
-  const remainingLabel =
-    remainingMs >= 60_000
-      ? `Available in ${Math.ceil(remainingMs / 60_000)} min`
-      : "Available in under a minute";
-
-  const cooldownPercent = Math.max(
-    0,
-    Math.min(100, (remainingMs / COOLDOWN_MS) * 100)
-  );
+  const remainingSeconds =
+    unlockAt !== null ? Math.max(0, Math.ceil((unlockAt - now) / 1000)) : 0;
+  const isLocked = unlockAt !== null && remainingSeconds > 0;
+  const isBusy = isLocked || triggerStatus === "loading";
 
   function setClampedCount(next: number) {
     setCount(Math.min(MAX_COUNT, Math.max(MIN_COUNT, next)));
@@ -207,16 +124,10 @@ function TriggerCard({
         </div>
       </div>
 
-      <span className={`status-pill ${runStatus}`}>
+      <span className={`status-pill ${isLocked ? "running" : "idle"}`}>
         <span className="status-dot" />
-        {runStatus === "running" ? remainingLabel : "Ready"}
+        {isLocked ? `Available in ${remainingSeconds}s` : "Ready"}
       </span>
-
-      {runStatus === "running" && (
-        <div className="cooldown-track" title={`${COOLDOWN_MINUTES}-minute cooldown`}>
-          <div className="cooldown-fill" style={{ width: `${cooldownPercent}%` }} />
-        </div>
-      )}
 
       <div className="count-field">
         <label htmlFor={`count-${senderEmail}`}>How many emails to send</label>
@@ -260,15 +171,15 @@ function TriggerCard({
         )}
         {triggerStatus === "loading"
           ? "Triggering..."
-          : runStatus === "running"
-          ? "Running..."
+          : isLocked
+          ? `Wait ${remainingSeconds}s`
           : `Trigger ${label}`}
       </button>
 
       {triggerStatus === "error" && (
         <div className="banner banner-error">{message}</div>
       )}
-      {triggerStatus === "idle" && runStatus === "running" && message && (
+      {triggerStatus === "idle" && message && (
         <div className="banner banner-success">{message}</div>
       )}
 

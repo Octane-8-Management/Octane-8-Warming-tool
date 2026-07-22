@@ -21,9 +21,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (getStatus(sender).status === "running") {
+  const currentStatus = getStatus(sender);
+  if (currentStatus.status === "running") {
     return NextResponse.json(
-      { error: `${sender} already has a run in progress. Please wait for the cooldown to finish.` },
+      {
+        error: `${sender} already has a run in progress. Please wait for the cooldown to finish.`,
+        run: currentStatus,
+      },
       { status: 409 }
     );
   }

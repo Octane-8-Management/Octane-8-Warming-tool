@@ -20,8 +20,12 @@ type SenderState = { status: Status; startedAt: number | null };
 type StatusFile = Record<string, SenderState>;
 
 // Primary unlock mechanism: each trigger locks its sender for this long.
-// n8n can also unlock early via the completion callback (POST route).
-const COOLDOWN_MINUTES = 10;
+// n8n can also unlock early via the completion callback (POST route). Kept
+// short and deliberately not tracked with a client-side polling loop — a
+// short fixed lockout after a successful trigger is enough to stop
+// accidental double-fires without the client needing to keep reconciling
+// with server state it can't fully trust across serverless instances.
+const COOLDOWN_SECONDS = 15;
 
 const STATUS_PATH = path.join(os.tmpdir(), "octane8-workflow-status.json");
 
@@ -41,7 +45,7 @@ function expireIfDone(entry: SenderState): SenderState {
   if (
     entry.status === "running" &&
     entry.startedAt !== null &&
-    Date.now() - entry.startedAt > COOLDOWN_MINUTES * 60_000
+    Date.now() - entry.startedAt > COOLDOWN_SECONDS * 1000
   ) {
     return { status: "idle", startedAt: null };
   }
@@ -61,7 +65,7 @@ export function getStatus(sender: string): {
     startedAt: entry.startedAt,
     availableAt:
       entry.status === "running" && entry.startedAt !== null
-        ? entry.startedAt + COOLDOWN_MINUTES * 60_000
+        ? entry.startedAt + COOLDOWN_SECONDS * 1000
         : null,
   };
 }
