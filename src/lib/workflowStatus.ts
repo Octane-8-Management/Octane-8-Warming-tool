@@ -21,7 +21,7 @@ type StatusFile = Record<string, SenderState>;
 
 // Primary unlock mechanism: each trigger locks its sender for this long.
 // n8n can also unlock early via the completion callback (POST route).
-const COOLDOWN_MINUTES = 30;
+const COOLDOWN_MINUTES = 10;
 
 const STATUS_PATH = path.join(os.tmpdir(), "octane8-workflow-status.json");
 

@@ -11,7 +11,7 @@ const POLL_INTERVAL_MS = 5000;
 const TICK_INTERVAL_MS = 1000;
 const MIN_COUNT = 1;
 const MAX_COUNT = 20;
-const COOLDOWN_MINUTES = 30;
+const COOLDOWN_MINUTES = 10;
 const COOLDOWN_MS = COOLDOWN_MINUTES * 60_000;
 
 // Server run state lives in /tmp, which is per-instance on serverless: a poll
@@ -39,6 +39,18 @@ function TriggerCard({
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const idleStreak = useRef(0);
+  // Mirrors `startedAt` for the poll loop to read synchronously. The interval
+  // is created once (see the mount effect below) and never recreated, so its
+  // closure would otherwise keep seeing the `startedAt` from mount — a ref
+  // sidesteps that stale-closure trap.
+  const startedAtRef = useRef<number | null>(null);
+  // The specific run (by startedAt) we most recently decided is over, so a
+  // stale instance re-echoing "still running" for that SAME run afterward
+  // gets ignored instead of reviving the cooldown bar. Without this, a
+  // straggling response can pop the bar back up right after it correctly
+  // disappeared, which is the "glitching" this whole poll dance is trying to
+  // avoid in the first place.
+  const lastEndedAtRef = useRef<number | null>(null);
 
   // The cooldown is a pure function of startedAt, so the client can run it on
   // its own and survive both a page reload and an amnesiac server instance.
@@ -46,6 +58,7 @@ function TriggerCard({
 
   function beginCooldown(ts: number) {
     idleStreak.current = 0;
+    startedAtRef.current = ts;
     setStartedAt(ts);
     try {
       localStorage.setItem(storageKey, String(ts));
@@ -56,6 +69,8 @@ function TriggerCard({
 
   function endCooldown() {
     idleStreak.current = 0;
+    lastEndedAtRef.current = startedAtRef.current;
+    startedAtRef.current = null;
     setStartedAt(null);
     try {
       localStorage.removeItem(storageKey);
@@ -72,7 +87,20 @@ function TriggerCard({
       const data = await res.json();
 
       if (data.status === "running" && typeof data.startedAt === "number") {
-        beginCooldown(data.startedAt);
+        // A stale echo of a run we've already decided is over — ignore it
+        // rather than reviving the cooldown.
+        if (data.startedAt === lastEndedAtRef.current) return;
+
+        // Only treat this as new information if it's a different run than
+        // the one we already have locked in. A stale serverless instance
+        // re-echoing the SAME run we already know about (e.g. after n8n's
+        // early-unlock landed on a different instance) must not reset the
+        // idle streak — otherwise that streak can never reach
+        // IDLE_CONFIRMATIONS while stale and fresh instances keep
+        // round-robining, and the UI bounces between locked/unlocked.
+        if (data.startedAt !== startedAtRef.current) {
+          beginCooldown(data.startedAt);
+        }
         return;
       }
 
@@ -86,6 +114,7 @@ function TriggerCard({
   useEffect(() => {
     const stored = Number(localStorage.getItem(storageKey));
     if (Number.isFinite(stored) && stored > 0 && Date.now() - stored < COOLDOWN_MS) {
+      startedAtRef.current = stored;
       setStartedAt(stored);
     }
 
@@ -99,7 +128,7 @@ function TriggerCard({
   }, [senderEmail]);
 
   // Only tick while something is actually counting down, and expire the run
-  // locally at 30 minutes rather than waiting for the server to agree.
+  // locally at COOLDOWN_MS rather than waiting for the server to agree.
   useEffect(() => {
     if (startedAt === null) return;
     const id = setInterval(() => {
