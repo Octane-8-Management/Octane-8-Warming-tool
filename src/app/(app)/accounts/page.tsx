@@ -116,6 +116,8 @@ export default function AccountsPage() {
   const [replySortDir, setReplySortDir] = useState<SortDir>("desc");
 
   const [detail, setDetail] = useState<DetailItem | null>(null);
+  const [confirmClear, setConfirmClear] = useState<"log" | "replies" | null>(null);
+  const [clearing, setClearing] = useState(false);
 
   async function loadAll(isRefresh = false) {
     if (isRefresh) setRefreshing(true);
@@ -265,6 +267,31 @@ export default function AccountsPage() {
       }
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleClearAll() {
+    if (!confirmClear) return;
+    const kind = confirmClear;
+
+    setClearing(true);
+    setError("");
+
+    try {
+      const res = await fetch(kind === "log" ? "/api/sending-log" : "/api/replies", {
+        method: "DELETE",
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        if (kind === "log") setLog([]);
+        else setReplies([]);
+        setConfirmClear(null);
+      } else {
+        setError(data.error || `Failed to clear ${kind === "log" ? "Sending Log" : "Replies"}`);
+      }
+    } finally {
+      setClearing(false);
     }
   }
 
@@ -604,6 +631,13 @@ export default function AccountsPage() {
                   <span className="stat-caption">
                     {filteredLog.length} of {log.length} shown · click a row for details
                   </span>
+                  <button
+                    className="link-action"
+                    onClick={() => setConfirmClear("log")}
+                    disabled={log.length === 0}
+                  >
+                    Clear all
+                  </button>
                 </div>
                 <div className="table-wrap">
                   {filteredLog.length === 0 ? (
@@ -664,6 +698,13 @@ export default function AccountsPage() {
                   <span className="stat-caption">
                     {filteredReplies.length} of {replies.length} shown · click a row for details
                   </span>
+                  <button
+                    className="link-action"
+                    onClick={() => setConfirmClear("replies")}
+                    disabled={replies.length === 0}
+                  >
+                    Clear all
+                  </button>
                 </div>
                 <div className="table-wrap">
                   {filteredReplies.length === 0 ? (
@@ -779,6 +820,54 @@ export default function AccountsPage() {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {confirmClear && (
+        <div className="modal-overlay" onClick={() => !clearing && setConfirmClear(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="modal-close"
+              onClick={() => setConfirmClear(null)}
+              disabled={clearing}
+            >
+              ✕
+            </button>
+            <h2 className="modal-title">
+              Clear all {confirmClear === "log" ? "Sending Log" : "Replies"} entries?
+            </h2>
+            <p style={{ fontSize: "0.9rem", color: "var(--text-muted)", marginBottom: "1rem" }}>
+              This permanently deletes every row in the{" "}
+              {confirmClear === "log" ? "Sending Log" : "Replies"} tab of the connected
+              Google Sheet, not just what's shown here. This cannot be undone.
+              {confirmClear === "log" && (
+                <>
+                  {" "}
+                  The n8n workflow also reads this log to avoid re-emailing the same
+                  recipient within 12 hours — clearing it resets that history.
+                </>
+              )}
+            </p>
+            {error && <div className="banner banner-error">{error}</div>}
+            <div style={{ display: "flex", gap: "0.6rem", justifyContent: "flex-end" }}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => setConfirmClear(null)}
+                disabled={clearing}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn"
+                style={{ background: "var(--danger)" }}
+                onClick={handleClearAll}
+                disabled={clearing}
+              >
+                {clearing && <span className="spinner" />}
+                {clearing ? "Clearing…" : "Clear all"}
+              </button>
+            </div>
           </div>
         </div>
       )}

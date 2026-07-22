@@ -87,6 +87,18 @@ export async function listSendingLog(): Promise<SendingLogEntry[]> {
   }));
 }
 
+// Blanks every data row below the header, leaving the header and sheet
+// itself intact. Note: n8n's randomizer reads this sheet to avoid
+// re-emailing the same recipient within 24h, so clearing it resets that
+// cooldown tracking too.
+export async function clearSendingLog(): Promise<void> {
+  const sheets = sheetsClient();
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${SENDING_LOG_SHEET_NAME}!A2:D`,
+  });
+}
+
 export type ReplyEntry = {
   originalSender: string;
   replier: string;
@@ -109,4 +121,14 @@ export async function listReplies(): Promise<ReplyEntry[]> {
     replySnippet: row[3] ?? "",
     timestamp: row[4] ?? "",
   }));
+}
+
+// Blanks every data row below the header, leaving the header and sheet
+// itself intact.
+export async function clearReplies(): Promise<void> {
+  const sheets = sheetsClient();
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${REPLIES_SHEET_NAME}!A2:E`,
+  });
 }
