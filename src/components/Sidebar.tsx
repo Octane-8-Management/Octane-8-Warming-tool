@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { BoltIcon, GridIcon, LogOutIcon } from "./icons";
-import { OctaneLogoMark } from "./OctaneLogoMark";
 
 const NAV_ITEMS = [
   { href: "/", label: "Trigger", icon: BoltIcon },
@@ -23,7 +22,10 @@ export default function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sidebar-logo">
-        <OctaneLogoMark size={26} />
+        {/* eslint-disable-next-line @next/next/no-img-element -- next/image's
+            sharp-based optimizer rejects this file in this environment even
+            though it's a valid PNG; a plain <img> bypasses that pipeline. */}
+        <img src="/octane-logo.png" alt="Octane 8" width={26} height={26} />
         <span className="sidebar-logo-text">Octane 8</span>
       </div>
 
