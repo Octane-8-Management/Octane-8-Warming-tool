@@ -11,6 +11,9 @@ import {
 } from "@/components/icons";
 
 const JUST_REFRESHED_DISPLAY_MS = 1600;
+// Silently re-pull the sheet on this cadence so new sends/replies that n8n
+// writes show up without the user hitting Refresh.
+const AUTO_REFRESH_MS = 15_000;
 
 type SendingLogEntry = {
   sender: string;
@@ -192,6 +195,11 @@ export default function AccountsPage() {
     }, JUST_REFRESHED_DISPLAY_MS);
   }
 
+  // Keep a live handle to the latest loadAll so the auto-refresh interval
+  // below always calls the current closure instead of a stale one.
+  const loadAllRef = useRef(loadAll);
+  loadAllRef.current = loadAll;
+
   useEffect(() => {
     return () => {
       if (justRefreshedTimeoutRef.current) {
@@ -199,6 +207,15 @@ export default function AccountsPage() {
       }
     };
   }, []);
+
+  // Auto-refresh once connected: a silent loadAll (no spinner, no "Updated"
+  // pulse, no entrance-animation replay) so the tables and counts reflect
+  // new rows n8n writes to the sheet on their own.
+  useEffect(() => {
+    if (connected !== true) return;
+    const id = setInterval(() => loadAllRef.current(false), AUTO_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [connected]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
