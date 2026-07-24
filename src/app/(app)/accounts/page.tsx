@@ -9,6 +9,7 @@ import {
   ReplyIcon,
   TrendingUpIcon,
 } from "@/components/icons";
+import { readSelection, writeSelection } from "@/lib/selection";
 
 const JUST_REFRESHED_DISPLAY_MS = 1600;
 // Silently re-pull the sheet on this cadence so new sends/replies that n8n
@@ -104,6 +105,9 @@ export default function AccountsPage() {
   const [log, setLog] = useState<SendingLogEntry[]>([]);
   const [replies, setReplies] = useState<ReplyEntry[]>([]);
 
+  const [selected, setSelected] = useState<string[]>([]);
+  const [pasteText, setPasteText] = useState("");
+
   const [newEmail, setNewEmail] = useState("");
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(true);
@@ -129,7 +133,7 @@ export default function AccountsPage() {
     // first — shaves a full round trip off every load.
     const [statusRes, accountsRes, logRes, repliesRes] = await Promise.all([
       fetch("/api/auth/google/status"),
-      fetch("/api/accounts"),
+      fetch("/api/recipients"),
       fetch("/api/sending-log"),
       fetch("/api/replies"),
     ]);
@@ -154,7 +158,7 @@ export default function AccountsPage() {
     let nextReplies = replies;
 
     if (accountsRes.ok) {
-      nextAccounts = accountsData.accounts;
+      nextAccounts = accountsData.recipients;
       setAccounts(nextAccounts);
     } else {
       setError(accountsData.error || "Failed to load accounts");
@@ -240,6 +244,68 @@ export default function AccountsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Drop anything selected that has since been removed from the master list,
+  // so a stale localStorage entry can never be written to the sheet.
+  useEffect(() => {
+    if (accounts.length === 0) return;
+    const valid = readSelection().filter((email) => accounts.includes(email));
+    setSelected(valid);
+    writeSelection(valid);
+  }, [accounts]);
+
+  function persistSelection(next: string[]) {
+    setSelected(next);
+    writeSelection(next);
+  }
+
+  function toggleOne(email: string) {
+    persistSelection(
+      selected.includes(email)
+        ? selected.filter((entry) => entry !== email)
+        : [...selected, email]
+    );
+  }
+
+  function selectAll() {
+    persistSelection([...accounts]);
+  }
+
+  function selectNone() {
+    persistSelection([]);
+  }
+
+  async function handlePaste() {
+    if (!pasteText.trim()) return;
+
+    setBusy(true);
+    setError("");
+
+    try {
+      const res = await fetch("/api/recipients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: pasteText }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || "Failed to add recipients");
+        return;
+      }
+
+      setAccounts(data.recipients);
+      const added = data.recipients.filter(
+        (email: string) => !accounts.includes(email)
+      );
+      persistSelection([...selected, ...added]);
+      setPasteText("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add recipients");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
     if (!newEmail.trim()) return;
@@ -248,16 +314,16 @@ export default function AccountsPage() {
     setError("");
 
     try {
-      const res = await fetch("/api/accounts", {
+      const res = await fetch("/api/recipients", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: newEmail.trim() }),
+        body: JSON.stringify({ text: newEmail.trim() }),
       });
       const data = await res.json();
 
       if (res.ok) {
         setNewEmail("");
-        await loadAll();
+        setAccounts(data.recipients);
       } else {
         setError(data.error || "Failed to add account");
       }
@@ -272,7 +338,7 @@ export default function AccountsPage() {
 
     try {
       const res = await fetch(
-        `/api/accounts?email=${encodeURIComponent(email)}`,
+        `/api/recipients?email=${encodeURIComponent(email)}`,
         { method: "DELETE" }
       );
       const data = await res.json();
@@ -599,6 +665,31 @@ export default function AccountsPage() {
                   </button>
                 </form>
 
+                <div className="recipient-controls">
+                  <textarea
+                    className="paste-box"
+                    rows={4}
+                    placeholder="Paste emails here — one per line, or comma separated"
+                    value={pasteText}
+                    onChange={(e) => setPasteText(e.target.value)}
+                    disabled={busy}
+                  />
+                  <div className="recipient-actions">
+                    <button className="btn" onClick={handlePaste} disabled={busy || !pasteText.trim()}>
+                      Add to list
+                    </button>
+                    <span className="selection-count">
+                      {selected.length} of {accounts.length} selected
+                    </span>
+                    <button className="btn btn-secondary" onClick={selectAll} disabled={busy}>
+                      Select all
+                    </button>
+                    <button className="btn btn-secondary" onClick={selectNone} disabled={busy}>
+                      Select none
+                    </button>
+                  </div>
+                </div>
+
                 {accounts.length === 0 ? (
                   <p className="empty-state">No accounts yet.</p>
                 ) : (
@@ -609,6 +700,13 @@ export default function AccountsPage() {
                         activity && (activity.sent > 0 || activity.received > 0);
                       return (
                         <li key={email} className="list-row">
+                          <input
+                            type="checkbox"
+                            className="recipient-checkbox"
+                            checked={selected.includes(email)}
+                            onChange={() => toggleOne(email)}
+                            aria-label={`Select ${email}`}
+                          />
                           <span className="list-row-main">
                             <span className="avatar">{email.charAt(0)}</span>
                             <span className="list-row-text">
