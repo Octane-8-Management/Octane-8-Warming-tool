@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isValidEmail, mergeEmails, parseEmailList } from "./recipients";
+import {
+  isValidEmail,
+  mergeEmails,
+  normalizeEmail,
+  parseEmailList,
+} from "./recipients";
 
 describe("isValidEmail", () => {
   it("accepts a normal address", () => {
@@ -48,6 +53,24 @@ describe("parseEmailList", () => {
 
   it("returns an empty array for blank input", () => {
     expect(parseEmailList("   \n  ")).toEqual([]);
+  });
+});
+
+describe("normalizeEmail", () => {
+  it("lowercases the value", () => {
+    expect(normalizeEmail("ALICE@EXAMPLE.COM")).toBe("alice@example.com");
+  });
+
+  it("trims leading and trailing whitespace", () => {
+    expect(normalizeEmail("  alice@example.com  ")).toBe("alice@example.com");
+  });
+
+  it("lowercases and trims together", () => {
+    expect(normalizeEmail("  Alice@Example.COM  ")).toBe("alice@example.com");
+  });
+
+  it("leaves an already-normalized value unchanged", () => {
+    expect(normalizeEmail("alice@example.com")).toBe("alice@example.com");
   });
 });
 

@@ -1,6 +1,6 @@
 import { google } from "googleapis";
 import { getAuthorizedClient } from "./googleAuth";
-import { mergeEmails } from "./recipients";
+import { mergeEmails, normalizeEmail } from "./recipients";
 
 // Same spreadsheet the n8n workflow reads/writes ("warmup testing").
 const SPREADSHEET_ID = "1_3Ymc656AVtPGfGkTA3dOftlvpVn1mhf8-SBRFfZQAk";
@@ -183,14 +183,15 @@ export async function listRecipients(): Promise<string[]> {
   });
 
   return (res.data.values ?? [])
-    .map((row) => (typeof row[0] === "string" ? row[0].trim().toLowerCase() : ""))
+    .map((row) => (typeof row[0] === "string" ? normalizeEmail(row[0]) : ""))
     .filter((email) => email.length > 0);
 }
 
 // Returns the full list after merging, so the caller does not need a re-read.
 export async function addRecipients(emails: string[]): Promise<string[]> {
+  const normalized = emails.map((email) => normalizeEmail(email));
   const existing = await listRecipients();
-  const { merged, added } = mergeEmails(existing, emails);
+  const { merged, added } = mergeEmails(existing, normalized);
 
   if (added.length === 0) return merged;
 
@@ -207,7 +208,7 @@ export async function addRecipients(emails: string[]): Promise<string[]> {
 
 export async function removeRecipient(email: string): Promise<void> {
   const remaining = (await listRecipients()).filter(
-    (entry) => entry !== email.trim().toLowerCase()
+    (entry) => entry !== normalizeEmail(email)
   );
 
   const sheets = sheetsClient();
@@ -231,17 +232,18 @@ export async function removeRecipient(email: string): Promise<void> {
 // sheet while sending nothing. This ordering means the worst case is a stale
 // trailing row, never an empty sheet.
 export async function replaceAccounts(emails: string[]): Promise<void> {
+  const normalized = emails.map((email) => normalizeEmail(email));
   const sheets = sheetsClient();
 
   await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
     range: `${ACCOUNTS_SHEET_NAME}!A2`,
     valueInputOption: "RAW",
-    requestBody: { values: emails.map((email) => [email]) },
+    requestBody: { values: normalized.map((email) => [email]) },
   });
 
   await sheets.spreadsheets.values.clear({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${ACCOUNTS_SHEET_NAME}!A${emails.length + 2}:A`,
+    range: `${ACCOUNTS_SHEET_NAME}!A${normalized.length + 2}:A`,
   });
 }

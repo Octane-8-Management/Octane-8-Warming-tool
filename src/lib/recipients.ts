@@ -9,12 +9,17 @@ export function isValidEmail(value: string): boolean {
   return EMAIL_PATTERN.test(value);
 }
 
+// Emails are normalised to lowercase and trimmed everywhere.
+export function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 // Accepts whatever the user pasted — newline-separated, comma-separated,
 // semicolon-separated, or a mix — and normalises to lowercase.
 export function parseEmailList(raw: string): string[] {
   return raw
     .split(/[\s,;]+/)
-    .map((entry) => entry.trim().toLowerCase())
+    .map((entry) => normalizeEmail(entry))
     .filter((entry) => entry.length > 0);
 }
 
