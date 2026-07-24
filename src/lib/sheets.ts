@@ -5,7 +5,6 @@ import { mergeEmails, normalizeEmail } from "./recipients";
 // Same spreadsheet the n8n workflow reads/writes ("warmup testing").
 const SPREADSHEET_ID = "1_3Ymc656AVtPGfGkTA3dOftlvpVn1mhf8-SBRFfZQAk";
 const ACCOUNTS_SHEET_NAME = "Accounts";
-const ACCOUNTS_SHEET_ID = 814125981;
 const SENDING_LOG_SHEET_NAME = "Sending Log";
 const REPLIES_SHEET_NAME = "Replies";
 const RECIPIENTS_SHEET_NAME = "Recipients";
@@ -25,46 +24,6 @@ export async function listAccounts(): Promise<string[]> {
   return (res.data.values ?? [])
     .map((row) => row[0])
     .filter((email): email is string => Boolean(email));
-}
-
-export async function addAccount(email: string): Promise<void> {
-  const sheets = sheetsClient();
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${ACCOUNTS_SHEET_NAME}!A:A`,
-    valueInputOption: "RAW",
-    requestBody: { values: [[email]] },
-  });
-}
-
-export async function removeAccount(email: string): Promise<void> {
-  const sheets = sheetsClient();
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${ACCOUNTS_SHEET_NAME}!A:A`,
-  });
-
-  const rows = res.data.values ?? [];
-  const rowIndex = rows.findIndex((row) => row[0] === email);
-  if (rowIndex === -1) return;
-
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: SPREADSHEET_ID,
-    requestBody: {
-      requests: [
-        {
-          deleteDimension: {
-            range: {
-              sheetId: ACCOUNTS_SHEET_ID,
-              dimension: "ROWS",
-              startIndex: rowIndex,
-              endIndex: rowIndex + 1,
-            },
-          },
-        },
-      ],
-    },
-  });
 }
 
 export type SendingLogEntry = {
@@ -164,7 +123,8 @@ async function ensureRecipientsSheet(): Promise<void> {
     return;
   }
 
-  const seed = await listAccounts();
+  const rawSeed = await listAccounts();
+  const seed = Array.from(new Set(rawSeed.map((email) => normalizeEmail(email))));
   await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
     range: `${RECIPIENTS_SHEET_NAME}!A1`,
