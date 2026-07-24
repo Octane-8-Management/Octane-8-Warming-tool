@@ -10,6 +10,7 @@ import {
   TrendingUpIcon,
 } from "@/components/icons";
 import { readSelection, writeSelection } from "@/lib/selection";
+import { parseEmailList } from "@/lib/recipients";
 
 const JUST_REFRESHED_DISPLAY_MS = 1600;
 // Silently re-pull the sheet on this cadence so new sends/replies that n8n
@@ -107,6 +108,7 @@ export default function AccountsPage() {
 
   const [selected, setSelected] = useState<string[]>([]);
   const [pasteText, setPasteText] = useState("");
+  const [recipientsLoaded, setRecipientsLoaded] = useState(false);
 
   const [newEmail, setNewEmail] = useState("");
   const [error, setError] = useState<string>("");
@@ -160,6 +162,7 @@ export default function AccountsPage() {
     if (accountsRes.ok) {
       nextAccounts = accountsData.recipients;
       setAccounts(nextAccounts);
+      setRecipientsLoaded(true);
     } else {
       setError(accountsData.error || "Failed to load accounts");
     }
@@ -233,6 +236,7 @@ export default function AccountsPage() {
     if (cached) {
       setConnected(cached.connected);
       setAccounts(cached.accounts);
+      setRecipientsLoaded(true);
       setLog(cached.log);
       setReplies(cached.replies);
       setLastSynced(new Date(cached.lastSynced));
@@ -247,11 +251,11 @@ export default function AccountsPage() {
   // Drop anything selected that has since been removed from the master list,
   // so a stale localStorage entry can never be written to the sheet.
   useEffect(() => {
-    if (accounts.length === 0) return;
+    if (!recipientsLoaded) return;
     const valid = readSelection().filter((email) => accounts.includes(email));
     setSelected(valid);
     writeSelection(valid);
-  }, [accounts]);
+  }, [accounts, recipientsLoaded]);
 
   function persistSelection(next: string[]) {
     setSelected(next);
@@ -294,10 +298,19 @@ export default function AccountsPage() {
       }
 
       setAccounts(data.recipients);
-      const added = data.recipients.filter(
-        (email: string) => !accounts.includes(email)
+      // Derive "what this paste actually contributed" from the pasted text
+      // itself, not from a diff against `accounts` — that closure value can
+      // be stale (e.g. the 15s auto-refresh ran between click and response),
+      // which would otherwise misclassify an existing address as newly
+      // pasted and re-select it even if the user had deliberately unticked it.
+      const pastedEmails = new Set(parseEmailList(pasteText));
+      const returnedRecipients: string[] = data.recipients;
+      const contributedByThisPaste = returnedRecipients.filter((email) =>
+        pastedEmails.has(email)
       );
-      persistSelection([...selected, ...added]);
+      const nextSelected = new Set(selected);
+      contributedByThisPaste.forEach((email) => nextSelected.add(email));
+      persistSelection([...nextSelected]);
       setPasteText("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add recipients");
