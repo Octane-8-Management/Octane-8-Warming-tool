@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { BoltIcon } from "@/components/icons";
+import { readSelection } from "@/lib/selection";
 
 type TriggerStatus = "idle" | "loading" | "error";
 type Accent = "blue" | "purple";
@@ -28,6 +29,7 @@ function TriggerCard({
   const [message, setMessage] = useState("");
   const [lastPayload, setLastPayload] = useState("");
   const [now, setNow] = useState(() => Date.now());
+  const [selectedCount, setSelectedCount] = useState(0);
 
   // One-shot check on load — e.g. someone else just triggered this sender
   // from another browser. Deliberately NOT a repeating poll: reconciling
@@ -65,11 +67,20 @@ function TriggerCard({
     return () => clearInterval(id);
   }, [unlockAt]);
 
+  // Re-reads on focus because the user selects recipients on the Accounts
+  // page and then navigates back here.
+  useEffect(() => {
+    const sync = () => setSelectedCount(readSelection().length);
+    sync();
+    window.addEventListener("focus", sync);
+    return () => window.removeEventListener("focus", sync);
+  }, []);
+
   async function handleTrigger() {
     setTriggerStatus("loading");
     setMessage("");
 
-    const payload = { sender: senderEmail, count };
+    const payload = { sender: senderEmail, count, recipients: readSelection() };
     setLastPayload(JSON.stringify(payload, null, 2));
 
     try {
@@ -101,7 +112,8 @@ function TriggerCard({
   const remainingSeconds =
     unlockAt !== null ? Math.max(0, Math.ceil((unlockAt - now) / 1000)) : 0;
   const isLocked = unlockAt !== null && remainingSeconds > 0;
-  const isBusy = isLocked || triggerStatus === "loading";
+  const hasSelection = selectedCount > 0;
+  const isBusy = isLocked || triggerStatus === "loading" || !hasSelection;
 
   function setClampedCount(next: number) {
     setCount(Math.min(MAX_COUNT, Math.max(MIN_COUNT, next)));
@@ -173,7 +185,9 @@ function TriggerCard({
           ? "Triggering..."
           : isLocked
           ? `Wait ${remainingSeconds}s`
-          : `Trigger ${label}`}
+          : !hasSelection
+          ? "No recipients selected"
+          : `Trigger ${label} (${selectedCount})`}
       </button>
 
       {triggerStatus === "error" && (
